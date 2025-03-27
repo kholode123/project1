@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>مسح باركود المنتجات الغذائية</title>
+    <style>
+        /* Styles généraux */
+        body {
+            font-family: 'Tajawal', Arial, sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 0;
+            text-align: center;
+            color: #333;
+        }
+        
+        header {
+            background-color: #2E7D32;
+            color: white;
+            padding: 1.5rem;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        
+        main {
+            margin: 2rem auto;
+            max-width: 800px;
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .scanner-container {
+            margin-bottom: 2rem;
+            position: relative;
+        }
+        
+        #barcode-video {
+            width: 100%;
+            max-width: 500px;
+            height: 300px;
+            border: 3px solid #4CAF50;
+            border-radius: 8px;
+            margin: 1rem 0;
+            background-color: #000;
+            object-fit: cover;
+        }
+        
+        #scanner-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 70%;
+            height: 30%;
+            border: 3px dashed #FFC107;
+            pointer-events: none;
+        }
+        
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            margin: 0.5rem;
+        }
+        
+        button:hover {
+            background-color: #388E3C;
+        }
+        
+        .product-info {
+            display: none;
+            text-align: right;
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-top: 1.5rem;
+            background-color: #f9f9f9;
+        }
+        
+        .health-rating {
+            font-weight: bold;
+            padding: 5px 10px;
+            border-radius: 5px;
+            margin: 5px 0;
+        }
+        
+        .good {
+            background-color: #E8F5E9;
+            color: #2E7D32;
+        }
+        
+        .moderate {
+            background-color: #FFF8E1;
+            color: #FF8F00;
+        }
+        
+        .bad {
+            background-color: #FFEBEE;
+            color: #C62828;
+        }
+        
+        .loading {
+            display: none;
+            margin: 1rem 0;
+        }
+        
+        .manual-input {
+            margin-top: 1.5rem;
+        }
+        
+        input[type="text"] {
+            padding: 10px;
+            width: 200px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-left: 10px;
+        }
+        
+        .permission-msg {
+            color: #C62828;
+            margin: 1rem 0;
+            display: none;
+        }
+        
+        #scan-help {
+            display: none; 
+            color: #666; 
+            margin-top: 10px;
+            text-align: right;
+            padding: 0 20px;
+        }
+        
+        @media (max-width: 600px) {
+            main {
+                padding: 1rem;
+                margin: 1rem;
+            }
+            
+            #barcode-video {
+                height: 250px;
+            }
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <h1>مسح باركود المنتجات الغذائية</h1>
+        <p>اكتشف مكونات المنتجات وتأثيرها على صحتك</p>
+    </header>
+
+    <main>
+        <div class="scanner-container">
+            <h2>قم بمسح باركود المنتج</h2>
+            <p>وجه الكاميرا نحو الباركود الموجود على المنتج</p>
+            
+            <div style="position: relative; display: inline-block;">
+                <video id="barcode-video" playsinline autoplay></video>
+                <div id="scanner-overlay"></div>
+            </div>
+            
+            <div class="permission-msg" id="permission-msg">
+                يرجى منح الإذن لاستخدام الكاميرا
+                <button id="retry-btn">إعادة المحاولة</button>
+            </div>
+            
+            <div class="loading" id="loading">
+                <p>جاري تحليل الباركود...</p>
+            </div>
+            
+            <div id="scan-help">
+                <p>تأكد من: </p>
+                <ul>
+                    <li>إضاءة كافية</li>
+                    <li>تثبيت الهاتف بشكل مستقر</li>
+                    <li>توجيه الكاميرا نحو الباركود بشكل متوازي</li>
+                </ul>
+            </div>
+            
+            <div>
+                <button id="start-scan">بدء المسح</button>
+                <button id="stop-scan" disabled>إيقاف المسح</button>
+            </div>
+            
+            <div class="manual-input">
+                <p>أو أدخل رقم الباركود يدويًا:</p>
+                <input type="text" id="manual-barcode" placeholder="أدخل رقم الباركود">
+                <button id="manual-submit">بحث</button>
+            </div>
+        </div>
+
+        <div class="product-info" id="product-info">
+            <h2>معلومات المنتج</h2>
+            <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+                <img id="product-image" src="" alt="صورة المنتج" style="width: 100px; height: 100px; object-fit: cover; margin-left: 1rem; border-radius: 5px;">
+                <div style="text-align: right;">
+                    <p><strong>اسم المنتج:</strong> <span id="product-name">-</span></p>
+                    <p><strong>الشركة المصنعة:</strong> <span id="product-brand">-</span></p>
+                    <p><strong>الباركود:</strong> <span id="product-barcode">-</span></p>
+                </div>
+            </div>
+            
+            <div style="margin-top: 1.5rem;">
+                <h3>المكونات:</h3>
+                <p id="product-ingredients">-</p>
+                
+                <h3>التقييم الصحي:</h3>
+                <div id="health-rating-container">
+                    <span id="health-rating" class="health-rating">-</span>
+                    <p id="health-rating-desc"></p>
+                </div>
+                
+                <h3>التحذيرات الصحية:</h3>
+                <ul id="health-warnings" style="text-align: right; padding-right: 20px;"></ul>
+                
+                <h3>نصائح صحية:</h3>
+                <p id="health-tips">-</p>
+            </div>
+        </div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+    <script>
+        // Éléments de l'interface
+        const startBtn = document.getElementById('start-scan');
+        const stopBtn = document.getElementById('stop-scan');
+        const manualSubmit = document.getElementById('manual-submit');
+        const manualBarcodeInput = document.getElementById('manual-barcode');
+        const videoElement = document.getElementById('barcode-video');
+        const permissionMsg = document.getElementById('permission-msg');
+        const retryBtn = document.getElementById('retry-btn');
+        const loadingElement = document.getElementById('loading');
+        const scanHelp = document.getElementById('scan-help');
+        
+        // État du scanner
+        let isScanning = false;
+        let scanTimeout;
+        
+        // Démarrer la caméra
+        async function startCamera() {
+            try {
+                // Vérifier si le navigateur supporte l'API
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    alert("Votre navigateur ne supporte pas l'accès à la caméra. Veuillez utiliser Chrome ou Firefox.");
+                    return false;
+                }
+
+                // Vérifier les caméras disponibles
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                if (videoDevices.length === 0) {
+                    alert("Aucune caméra disponible !");
+                    return false;
+                }
+
+                // Configuration pour mobile
+                const constraints = {
+                    video: {
+                        facingMode: 'environment',
+                        width: { min: 640, ideal: 1280, max: 1920 },
+                        height: { min: 480, ideal: 720, max: 1080 },
+                        frameRate: { ideal: 30, min: 15 }
+                    },
+                    audio: false
+                };
+
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                videoElement.srcObject = stream;
+                videoElement.setAttribute('playsinline', 'true'); // Important pour iOS
+                videoElement.play()
+                    .then(() => {
+                        permissionMsg.style.display = 'none';
+                        scanHelp.style.display = 'block';
+                    })
+                    .catch(err => {
+                        console.error("Erreur de lecture vidéo:", err);
+                        alert("Impossible de démarrer la caméra. Veuillez vérifier les permissions.");
+                    });
+                
+                return true;
+            } catch (error) {
+                console.error("Erreur caméra:", error);
+                
+                // Messages d'erreur spécifiques
+                if (error.name === 'NotAllowedError') {
+                    permissionMsg.innerHTML = `
+                        Permission refusée pour la caméra.<br>
+                        <button id="retry-btn" style="margin-top:10px;">Réessayer</button>
+                        <p style="font-size:0.9em;margin-top:10px;">
+                            Veuillez vérifier les paramètres du navigateur/téléphone
+                        </p>
+                    `;
+                } else if (error.name === 'NotFoundError') {
+                    permissionMsg.innerHTML = `
+                        Aucune caméra disponible.<br>
+                        <button id="retry-btn" style="margin-top:10px;">Réessayer</button>
+                    `;
+                } else {
+                    permissionMsg.innerHTML = `
+                        Erreur inattendue: ${error.message}<br>
+                        <button id="retry-btn" style="margin-top:10px;">Réessayer</button>
+                    `;
+                }
+                
+                permissionMsg.style.display = 'block';
+                scanHelp.style.display = 'none';
+                return false;
+            }
+        }
+        
+        // Démarrer le scanner
+        async function startScanner() {
+            if (isScanning) return;
+            
+            const cameraStarted = await startCamera();
+            if (!cameraStarted) return;
+            
+            isScanning = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            loadingElement.style.display = 'none';
+            
+            // Afficher l'aide
+            scanHelp.style.display = 'block';
+            
+            Quagga.init({
+                inputStream: {
+                    name: "Live",
+                    type: "LiveStream",
+                    target: videoElement,
+                    constraints: {
+                        facingMode: "environment"
+                    },
+                },
+                decoder: {
+                    readers: ["ean_reader", "ean_8_reader", "upc_reader", "upc_e_reader"]
+                },
+                locate: true,
+                debug: false
+            }, function(err) {
+                if (err) {
+                    console.error("Erreur d'initialisation:", err);
+                    alert("Échec de l'initialisation du scanner: " + err.message);
+                    resetScanner();
+                    return;
+                }
+                Quagga.start();
+                
+                // Timeout après 30 secondes
+                scanTimeout = setTimeout(() => {
+                    if (isScanning) {
+                        alert("Temps de scan écoulé. Veuillez réessayer.");
+                        stopScanner();
+                    }
+                }, 30000);
+                
+                Quagga.onDetected(function(result) {
+                    if (result && result.codeResult) {
+                        clearTimeout(scanTimeout);
+                        handleBarcodeResult(result.codeResult.code);
+                    }
+                });
+            });
+        }
+        
+        // Arrêter le scanner
+        function stopScanner() {
+            if (!isScanning) return;
+            
+            clearTimeout(scanTimeout);
+            Quagga.stop();
+            if (videoElement.srcObject) {
+                videoElement.srcObject.getTracks().forEach(track => track.stop());
+                videoElement.srcObject = null;
+            }
+            
+            isScanning = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            scanHelp.style.display = 'none';
+        }
+        
+        // Traiter le code-barres
+        function handleBarcodeResult(barcode) {
+            if (!barcode) {
+                alert("Code-barres non reconnu. Veuillez réessayer.");
+                return;
+            }
+            
+            stopScanner();
+            loadingElement.style.display = 'block';
+            
+            console.log("Code-barres scanné:", barcode);
+            document.getElementById('product-barcode').textContent = barcode;
+            
+            // Simulation de requête serveur
+            setTimeout(() => {
+                loadMockProductData(barcode);
+                loadingElement.style.display = 'none';
+                document.getElementById('product-info').style.display = 'block';
+                document.getElementById('product-info').scrollIntoView({ behavior: 'smooth' });
+            }, 1500);
+        }
+        
+        // Données mock pour les produits
+        function loadMockProductData(barcode) {
+            // Données par défaut
+            let productData = {
+                name: "Produit inconnu",
+                brand: "Inconnu",
+                ingredients: "Non disponible",
+                healthRating: "moderate",
+                healthDesc: "Information non disponible",
+                warnings: ["Aucun avertissement disponible"],
+                tips: "Aucun conseil disponible",
+                image: ""
+            };
+            
+            // Exemples de codes-barres
+            if (barcode === '7622210288257') {
+                productData = {
+                    name: "Biscuit Prince Chocolat",
+                    brand: "LU",
+                    ingredients: "Farine de blé, sucre, huile végétale, cacao, émulsifiants, sel",
+                    healthRating: "moderate",
+                    healthDesc: "Moyen - Contient beaucoup de sucre",
+                    warnings: ["Contient beaucoup de sucre", "Contient de l'huile de palme"],
+                    tips: "À consommer avec modération à cause du sucre et des graisses",
+                    image: "https://via.placeholder.com/100?text=Prince"
+                };
+            } else if (barcode === '5449000000996') {
+                productData = {
+                    name: "Boisson Coca-Cola",
+                    brand: "Coca-Cola",
+                    ingredients: "Eau, sucre, gaz carbonique, colorant caramel, acide phosphorique, arômes naturels, caféine",
+                    healthRating: "bad",
+                    healthDesc: "Mauvais - Très riche en sucre",
+                    warnings: ["Très riche en sucre", "Favorise les caries", "Peut contribuer au diabète"],
+                    tips: "À éviter ou consommer très occasionnellement",
+                    image: "https://via.placeholder.com/100?text=Coca-Cola"
+                };
+            } else if (barcode === '12345678') {
+                productData = {
+                    name: "Lait entier",
+                    brand: "Almarai",
+                    ingredients: "Lait de vache frais, vitamine D, vitamine A",
+                    healthRating: "good",
+                    healthDesc: "Bon - Source de calcium et vitamines",
+                    warnings: ["Contient du lactose (inadapté aux intolérants)"],
+                    tips: "Bonne source de calcium, à consommer quotidiennement avec modération",
+                    image: "https://via.placeholder.com/100?text=Lait"
+                };
+            }
+            
+            // Remplir l'interface
+            document.getElementById('product-name').textContent = productData.name;
+            document.getElementById('product-brand').textContent = productData.brand;
+            document.getElementById('product-ingredients').textContent = productData.ingredients;
+            document.getElementById('health-rating').textContent = productData.healthDesc;
+            document.getElementById('health-rating').className = 'health-rating ' + productData.healthRating;
+            document.getElementById('health-rating-desc').textContent = getHealthDescription(productData.healthRating);
+            document.getElementById('health-tips').textContent = productData.tips;
+            
+            const warningsList = document.getElementById('health-warnings');
+            warningsList.innerHTML = '';
+            productData.warnings.forEach(warning => {
+                const li = document.createElement('li');
+                li.textContent = warning;
+                warningsList.appendChild(li);
+            });
+            
+            document.getElementById('product-image').src = productData.image || 'https://via.placeholder.com/100?text=No+Image';
+        }
+        
+        function getHealthDescription(rating) {
+            const descriptions = {
+                'good': 'Ce produit est un bon choix pour la santé',
+                'moderate': 'Ce produit est acceptable en quantité modérée',
+                'bad': 'Ce produit est mauvais pour la santé, à consommer rarement'
+            };
+            return descriptions[rating] || '';
+        }
+        
+        // Saisie manuelle
+        function manualBarcodeSubmit() {
+            const barcode = manualBarcodeInput.value.trim();
+            if (barcode.length < 8) {
+                alert("Le code-barres doit contenir au moins 8 caractères");
+                return;
+            }
+            handleBarcodeResult(barcode);
+        }
+        
+        // Réinitialiser le scanner
+        function resetScanner() {
+            isScanning = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            scanHelp.style.display = 'none';
+            if (videoElement.srcObject) {
+                videoElement.srcObject.getTracks().forEach(track => track.stop());
+                videoElement.srcObject = null;
+            }
+        }
+        
+        // Écouteurs d'événements
+        startBtn.addEventListener('click', startScanner);
+        stopBtn.addEventListener('click', stopScanner);
+        manualSubmit.addEventListener('click', manualBarcodeSubmit);
+        retryBtn.addEventListener('click', startScanner);
+        
+        // Entrée manuelle avec la touche Enter
+        manualBarcodeInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                manualBarcodeSubmit();
+            }
+        });
+        
+        // Arrêter le scanner en quittant la page
+        window.addEventListener('beforeunload', stopScanner);
+        
+        // Détection du mobile
+        function detectDevice() {
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            
+            if (isMobile) {
+                document.getElementById('barcode-video').style.height = '250px';
+                
+                const mobileHelp = document.createElement('div');
+                mobileHelp.innerHTML = `
+                    <p style="color:#666; text-align:right; margin-top:10px;">
+                        Conseils pour mobile:<br>
+                        - Utilisez la caméra arrière<br>
+                        - Maintenez le téléphone stable<br>
+                        - Approchez à environ 15 cm du code-barres
+                    </p>
+                `;
+                document.querySelector('.scanner-container').appendChild(mobileHelp);
+            }
+        }
+        
+        // Démarrer la détection au chargement
+        window.addEventListener('DOMContentLoaded', detectDevice);
+    </script>
+</body>
+</html>
