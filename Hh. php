@@ -1,0 +1,258 @@
+<?php
+require_once 'config.php';
+require_once 'auth_check.php'; // ملف للتحقق من الصلاحيات
+
+class PharmacyProfile {
+    private $pdo;
+    private $user_id;
+    private $pharmacy;
+
+    public function __construct($pdo, $user_id) {
+        $this->pdo = $pdo;
+        $this->user_id = $user_id;
+        $this->loadPharmacyData();
+    }
+
+    private function loadPharmacyData() {
+        $stmt = $this->pdo->prepare("SELECT p.*, u.email FROM pharmacies p JOIN users u ON p.user_id = u.id WHERE u.id = ?");
+        $stmt->execute([$this->user_id]);
+        $this->pharmacy = $stmt->fetch();
+
+        if(!$this->pharmacy) {
+            throw new Exception("لم يتم العثور على بيانات الصيدلية");
+        }
+    }
+
+    public function getPharmacyData() {
+        return $this->pharmacy;
+    }
+
+    public function updateProfile($data, $files) {
+        $this->validateInput($data);
+        
+        $this->pdo->beginTransaction();
+        try {
+            $this->updateUserEmail($data['email']);
+            $this->updatePharmacyData($data);
+            
+            if (!empty($files['image']['name'])) {
+                $this->handleImageUpload($files['image']);
+            }
+            
+            $this->pdo->commit();
+            return "تم تحديث الملف الشخصي بنجاح";
+        } catch (Exception $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    private function validateInput($data) {
+        $required = ['name', 'email', 'address', 'city', 'phone', 'license_number'];
+        foreach ($required as $field) {
+            if (empty($data[$field])) {
+                throw new Exception("حقل {$field} مطلوب");
+            }
+        }
+
+        if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
+            throw new Exception("البريد الإلكتروني غير صالح");
+        }
+    }
+
+    private function updateUserEmail($email) {
+        $stmt = $this->pdo->prepare("UPDATE users SET email = ?, updated_at = NOW() WHERE id = ?");
+        if(!$stmt->execute([$email, $this->user_id])) {
+            throw new Exception("فشل في تحديث البريد الإلكتروني");
+        }
+    }
+
+    private function updatePharmacyData($data) {
+        $stmt = $this->pdo->prepare("UPDATE pharmacies SET 
+            name = ?, address = ?, city = ?, phone = ?, license_number = ?, updated_at = NOW() 
+            WHERE user_id = ?");
+        
+        $params = [
+            $data['name'],
+            $data['address'],
+            $data['city'],
+            $data['phone'],
+            $data['license_number'],
+            $this->user_id
+        ];
+        
+        if(!$stmt->execute($params)) {
+            throw new Exception("فشل في تحديث بيانات الصيدلية");
+        }
+    }
+
+    private function handleImageUpload($image) {
+        $target_dir = UPLOAD_DIR;
+        $this->ensureUploadDirectoryExists($target_dir);
+        
+        $imageInfo = getimagesize($image['tmp_name']);
+        if ($imageInfo === false) {
+            throw new Exception("الملف المرفوع ليس صورة صالحة");
+        }
+
+        if ($image['size'] > MAX_FILE_SIZE) {
+            throw new Exception("حجم الصورة يجب أن يكون أقل من 2MB");
+        }
+
+        $imageType = strtolower(pathinfo($image['name'], PATHINFO_EXTENSION));
+        if (!in_array($imageType, ALLOWED_TYPES)) {
+            throw new Exception("نوع الصورة غير مسموح به");
+        }
+
+        $newFilename = 'pharmacy_' . $this->user_id . '_' . uniqid() . '.' . $imageType;
+        $target_path = $target_dir . $newFilename;
+
+        if (!move_uploaded_file($image['tmp_name'], $target_path)) {
+            throw new Exception("حدث خطأ أثناء رفع الصورة");
+        }
+
+        $this->deleteOldImage();
+        $this->updateImagePath($target_path);
+        $_SESSION['user_image'] = $target_path;
+    }
+
+    private function ensureUploadDirectoryExists($dir) {
+        if (!file_exists($dir) && !mkdir($dir, 0755, true)) {
+            throw new Exception("تعذر إنشاء مجلد التحميل");
+        }
+    }
+
+    private function deleteOldImage() {
+        if (!empty($this->pharmacy['image']) && file_exists($this->pharmacy['image'])) {
+            unlink($this->pharmacy['image']);
+        }
+    }
+
+    private function updateImagePath($path) {
+        $stmt = $this->pdo->prepare("UPDATE pharmacies SET image = ? WHERE user_id = ?");
+        if(!$stmt->execute([$path, $this->user_id])) {
+            throw new Exception("فشل في تحديث صورة الصيدلية");
+        }
+    }
+}
+
+// معالجة الطلب
+try {
+    $pharmacyProfile = new PharmacyProfile($pdo, $_SESSION['user_id']);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $message = $pharmacyProfile->updateProfile($_POST, $_FILES);
+        $_SESSION['success_message'] = $message;
+        header("Location: edit_profile.php");
+        exit();
+    }
+
+    $pharmacy = $pharmacyProfile->getPharmacyData();
+} catch (Exception $e) {
+    $_SESSION['error_message'] = $e->getMessage();
+    header("Location: edit_profile.php");
+    exit();
+}
+
+// عرض الواجهة
+include 'header.php';
+?>
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تعديل الملف الشخصي - نظام الأدوية النادرة</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <div class="dashboard">
+        <?php include 'sidebar.php'; ?>
+
+        <div class="main-content">
+            <?php include 'topbar.php'; ?>
+
+            <div class="profile-container">
+                <div class="profile-header">
+                    <h2>تعديل الملف الشخصي للصيدلية</h2>
+                    <p>قم بتحديث معلومات الصيدلية الخاصة بك</p>
+                </div>
+                
+                <?php if(isset($_SESSION['error_message'])): ?>
+                    <div class="alert alert-danger"><?= $_SESSION['error_message']; unset($_SESSION['error_message']); ?></div>
+                <?php endif; ?>
+                
+                <?php if(isset($_SESSION['success_message'])): ?>
+                    <div class="alert alert-success"><?= $_SESSION['success_message']; unset($_SESSION['success_message']); ?></div>
+                <?php endif; ?>
+                
+                <form method="POST" action="edit_profile.php" enctype="multipart/form-data">
+                    <div class="profile-image-container">
+                        <img src="<?= !empty($pharmacy['image']) ? htmlspecialchars($pharmacy['image']) : 'assets/default-pharmacy.png'; ?>" 
+                             alt="صورة الصيدلية" class="profile-image" id="profileImagePreview">
+                        <label for="profileImage" class="change-image-btn">
+                            <i class="fas fa-camera"></i>
+                            <input type="file" id="profileImage" name="image" accept="image/*" style="display: none;">
+                        </label>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="name">اسم الصيدلية</label>
+                            <input type="text" id="name" name="name" value="<?= htmlspecialchars($pharmacy['name']); ?>" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="email">البريد الإلكتروني</label>
+                            <input type="email" id="email" name="email" value="<?= htmlspecialchars($pharmacy['email']); ?>" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="address">عنوان الصيدلية</label>
+                        <input type="text" id="address" name="address" value="<?= htmlspecialchars($pharmacy['address']); ?>" required>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="city">المدينة</label>
+                            <input type="text" id="city" name="city" value="<?= htmlspecialchars($pharmacy['city']); ?>" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="phone">رقم الهاتف</label>
+                            <input type="tel" id="phone" name="phone" value="<?= htmlspecialchars($pharmacy['phone']); ?>" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="license_number">رقم الرخصة</label>
+                        <input type="text" id="license_number" name="license_number" 
+                               value="<?= htmlspecialchars($pharmacy['license_number']); ?>" required>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <a href="pharmacist.php" class="btn btn-outline"><i class="fas fa-arrow-left"></i> رجوع</a>
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> حفظ التغييرات</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/main.js"></script>
+    <script>
+        // عرض معاينة الصورة عند اختيارها
+        document.getElementById('profileImage').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('profileImagePreview').src = e.target.result;
+                }
+                reader.readAsDataURL(file);
+            }
+        });
+    </script>
+</body>
+</html>
