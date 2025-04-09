@@ -1,7 +1,7 @@
-<?php
-// التحقق من تسجيل الدخول ونوع المستخدم
+لا اريد ان ياخذ المستخدم الى اسفل الموقع  لكي يعرض المعلومات بل  يقوم باظهار جميع التفاصيل المتبقية تحت ذالك الدواء المحدد<?php
+// التحقق من تسجيل الدخول والصلاحيات
 session_start();
-if(!isset($_SESSION['user_id']) || $_SESSION['user_type'] != 'pharmacist') {
+if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit();
 }
@@ -9,119 +9,388 @@ if(!isset($_SESSION['user_id']) || $_SESSION['user_type'] != 'pharmacist') {
 // اتصال بقاعدة البيانات
 require_once 'config.php';
 
-// جلب بيانات الصيدلية
-$user_id = $_SESSION['user_id'];
-$stmt = $pdo->prepare("SELECT p.*, u.email FROM pharmacies p JOIN users u ON p.user_id = u.id WHERE u.id = ?");
-$stmt->execute([$user_id]);
-$pharmacy = $stmt->fetch();
+// معالجة معايير البحث
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$type_filter = isset($_GET['type']) ? $_GET['type'] : '';
 
-if(!$pharmacy) {
-    $_SESSION['error_message'] = "لم يتم العثور على بيانات الصيدلية";
-    header("Location: pharmacist.php");
-    exit();
+// بناء استعلام SQL مع فلترة
+$sql = "SELECT * FROM medicines WHERE 1=1";
+$params = [];
+
+if (!empty($search)) {
+    $sql .= " AND (scientific_name LIKE ? OR trade_name LIKE ? OR manufacturer LIKE ?)";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
+    $params[] = "%$search%";
 }
 
-// معالجة تحديث البيانات
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // بدء المعاملة
-    $pdo->beginTransaction();
-    
-    try {
-        // جمع البيانات من النموذج مع التطهير
-        $name = htmlspecialchars(trim($_POST['name']));
-        $email = filter_var(trim($_POST['email']), FILTER_SANITIZE_EMAIL);
-        $address = htmlspecialchars(trim($_POST['address']));
-        $city = htmlspecialchars(trim($_POST['city']));
-        $phone = htmlspecialchars(trim($_POST['phone']));
-        $license_number = htmlspecialchars(trim($_POST['license_number']));
-        
-        // التحقق من صحة البيانات
-        if (empty($name) || empty($email) || empty($address) || empty($city) || empty($phone) || empty($license_number)) {
-            throw new Exception("جميع الحقول مطلوبة");
-        }
-        
-        if(!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            throw new Exception("البريد الإلكتروني غير صالح");
-        }
-        
-        // 1. تحديث بيانات المستخدم (البريد الإلكتروني)
-        $update_user = $pdo->prepare("UPDATE users SET email = ?, updated_at = NOW() WHERE id = ?");
-        if(!$update_user->execute([$email, $user_id])) {
-            throw new Exception("فشل في تحديث بيانات المستخدم");
-        }
-        
-        // 2. تحديث بيانات الصيدلية
-        $update_pharmacy = $pdo->prepare("UPDATE pharmacies SET name = ?, address = ?, city = ?, phone = ?, license_number = ?, updated_at = NOW() WHERE user_id = ?");
-        if(!$update_pharmacy->execute([$name, $address, $city, $phone, $license_number, $user_id])) {
-            throw new Exception("فشل في تحديث بيانات الصيدلية");
-        }
-        
-        // 3. معالجة صورة الصيدلية إذا تم رفعها
-        if (!empty($_FILES['image']['name'])) {
-            $target_dir = "uploads/";
-            
-            // إنشاء المجلد إذا لم يكن موجوداً
-            if (!file_exists($target_dir)) {
-                if(!mkdir($target_dir, 0777, true)) {
-                    throw new Exception("تعذر إنشاء مجلد التحميل");
-                }
-            }
-            
-            $imageFileType = strtolower(pathinfo($_FILES["image"]["name"], PATHINFO_EXTENSION));
-            
-            // التحقق من أن الملف صورة
-            $check = getimagesize($_FILES["image"]["tmp_name"]);
-            if ($check === false) {
-                throw new Exception("الملف المرفوع ليس صورة");
-            }
-            
-            // التحقق من حجم الصورة (2MB كحد أقصى)
-            if ($_FILES["image"]["size"] > 2000000) {
-                throw new Exception("حجم الصورة يجب أن يكون أقل من 2MB");
-            }
-            
-            // التحقق من نوع الصورة
-            $allowed_types = ['jpg', 'jpeg', 'png', 'gif'];
-            if (!in_array($imageFileType, $allowed_types)) {
-                throw new Exception("نوع الصورة غير مسموح به. المسموح به: JPG, JPEG, PNG, GIF");
-            }
-            
-            // إنشاء اسم فريد للصورة
-            $new_filename = 'pharmacy_' . $user_id . '_' . uniqid() . '.' . $imageFileType;
-            $target_path = $target_dir . $new_filename;
-            
-            // محاولة رفع الصورة
-            if (move_uploaded_file($_FILES["image"]["tmp_name"], $target_path)) {
-                // حذف الصورة القديمة إذا كانت موجودة
-                if (!empty($pharmacy['image']) && file_exists($pharmacy['image'])) {
-                    unlink($pharmacy['image']);
-                }
-                
-                // تحديث مسار الصورة في قاعدة البيانات
-                $update_image = $pdo->prepare("UPDATE pharmacies SET image = ?, updated_at = NOW() WHERE user_id = ?");
-                if(!$update_image->execute([$target_path, $user_id])) {
-                    throw new Exception("فشل في تحديث صورة الصيدلية");
-                }
+if (!empty($type_filter) && in_array($type_filter, ['cancer', 'rare', 'special', 'other'])) {
+    $sql .= " AND medicine_type = ?";
+    $params[] = $type_filter;
+}
 
-                $_SESSION['user_image'] = $target_path;
-            } else {
-                throw new Exception("حدث خطأ أثناء رفع الصورة");
-            }
-        }
-        
-        // إتمام المعاملة إذا نجحت جميع العمليات
-        $pdo->commit();
-        
-        $_SESSION['success_message'] = "تم تحديث الملف الشخصي بنجاح";
-        header("Location: edit_profile.php");
-        exit();
+$sql .= " ORDER BY created_at DESC";
 
-    } catch (Exception $e) {
-        // التراجع عن جميع التغييرات في حالة حدوث خطأ
-        $pdo->rollBack();
-        $_SESSION['error_message'] = $e->getMessage();
-        header("Location: edit_profile.php");
-        exit();
-    }
+// جلب الأدوية مع التصفية
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
+$medicines = $stmt->fetchAll();
+
+// جلب الأدوية المفضلة للمستخدم
+$favorites_stmt = $pdo->prepare("SELECT medicine_id FROM favorites WHERE user_id = ?");
+$favorites_stmt->execute([$_SESSION['user_id']]);
+$favorites = $favorites_stmt->fetchAll(PDO::FETCH_COLUMN);
+
+// جلب تفاصيل دواء معين إذا كان هناك معرف دواء في الرابط
+$selected_medicine = null;
+if (isset($_GET['medicine_id'])) {
+    $stmt = $pdo->prepare("SELECT * FROM medicines WHERE id = ?");
+    $stmt->execute([$_GET['medicine_id']]);
+    $selected_medicine = $stmt->fetch();
 }
 ?>
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>قائمة الأدوية - نظام الأدوية النادرة</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .search-section {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .search-form {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .search-form input, .search-form select {
+            flex: 1;
+            min-width: 200px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .search-btn {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .medicine-card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .medicine-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        .medicine-header {
+            background-color: #3498db;
+            color: white;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .medicine-name {
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .favorite-btn {
+            background-color: #e74c3c;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .medicine-body {
+            padding: 15px;
+        }
+        .medicine-image {
+            max-width: 100px;
+            max-height: 100px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .info-row {
+            display: flex;
+            margin-bottom: 8px;
+        }
+        .info-label {
+            font-weight: bold;
+            min-width: 100px;
+            color: #2c3e50;
+        }
+        .info-value {
+            flex: 1;
+        }
+        .back-btn {
+            display: inline-block;
+            background-color: #95a5a6;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 5px;
+            text-decoration: none;
+            margin-bottom: 15px;
+        }
+        .back-btn:hover {
+            background-color: #7f8c8d;
+        }
+        .medicine-details {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-top: 20px;
+            display: <?php echo $selected_medicine ? 'block' : 'none'; ?>;
+        }
+        .section-title {
+            color: #3498db;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 5px;
+            margin-top: 20px;
+            margin-bottom: 15px;
+        }
+        .close-btn {
+            float: left;
+            background-color: #e74c3c;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        @media (max-width: 768px) {
+            .info-row {
+                flex-direction: column;
+            }
+            .info-label {
+                margin-bottom: 5px;
+            }
+            .search-form {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="dashboard.php" class="back-btn"><i class="fas fa-arrow-left"></i> العودة للوحة التحكم</a>
+        
+        <div class="header">
+            <h1><i class="fas fa-pills"></i> قائمة الأدوية المتاحة</h1>
+        </div>
+
+        <div class="search-section">
+            <form method="GET" class="search-form">
+                <input type="text" name="search" placeholder="ابحث باسم الدواء العلمي أو التجاري أو الشركة المصنعة" value="<?php echo htmlspecialchars($search); ?>">
+                <select name="type">
+                    <option value="">جميع الأنواع</option>
+                    <option value="cancer" <?php echo $type_filter == 'cancer' ? 'selected' : ''; ?>>أدوية الأورام</option>
+                    <option value="rare" <?php echo $type_filter == 'rare' ? 'selected' : ''; ?>>أدوية نادرة</option>
+                    <option value="special" <?php echo $type_filter == 'special' ? 'selected' : ''; ?>>أدوية خاصة</option>
+                    <option value="other" <?php echo $type_filter == 'other' ? 'selected' : ''; ?>>أخرى</option>
+                </select>
+                <button type="submit" class="search-btn"><i class="fas fa-search"></i> بحث</button>
+            </form>
+        </div>
+
+        <?php if (empty($medicines)): ?>
+            <div style="text-align: center; padding: 40px; background-color: white; border-radius: 8px;">
+                <i class="fas fa-info-circle" style="font-size: 50px; color: #95a5a6;"></i>
+                <h3>لا توجد أدوية مطابقة لبحثك</h3>
+            </div>
+        <?php else: ?>
+            <div class="medicines-list">
+                <?php foreach ($medicines as $medicine): ?>
+                    <div class="medicine-card" onclick="window.location.href='?medicine_id=<?php echo $medicine['id']; ?>&<?php echo http_build_query($_GET); ?>'">
+                        <div class="medicine-header">
+                            <div class="medicine-name">
+                                <?php echo htmlspecialchars($medicine['scientific_name']); ?>
+                                <?php if (!empty($medicine['trade_name'])): ?>
+                                    <small>(<?php echo htmlspecialchars($medicine['trade_name']); ?>)</small>
+                                <?php endif; ?>
+                            </div>
+                            <button class="favorite-btn" data-medicine-id="<?php echo $medicine['id']; ?>" onclick="event.stopPropagation(); toggleFavorite(this)">
+                                <i class="fas <?php echo in_array($medicine['id'], $favorites) ? 'fa-heart' : 'far fa-heart'; ?>"></i>
+                            </button>
+                        </div>
+                        
+                        <div class="medicine-body">
+                            <?php if (!empty($medicine['image'])): ?>
+                                <img src="<?php echo htmlspecialchars($medicine['image']); ?>" class="medicine-image" alt="صورة الدواء">
+                            <?php endif; ?>
+                            
+                            <div class="info-row">
+                                <div class="info-label">الشركة المصنعة:</div>
+                                <div class="info-value"><?php echo htmlspecialchars($medicine['manufacturer']); ?></div>
+                            </div>
+                            
+                            <div class="info-row">
+                                <div class="info-label">نوع الدواء:</div>
+                                <div class="info-value">
+                                    <?php 
+                                        $types = [
+                                            'cancer' => 'أدوية الأورام',
+                                            'rare' => 'أدوية نادرة',
+                                            'special' => 'أدوية خاصة',
+                                            'other' => 'أخرى'
+                                        ];
+                                        echo $types[$medicine['medicine_type']] ?? 'غير محدد';
+                                    ?>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+
+        <?php if ($selected_medicine): ?>
+            <div class="medicine-details" id="medicineDetails">
+                <button class="close-btn" onclick="closeDetails()"><i class="fas fa-times"></i> إغلاق</button>
+                
+                <div class="medicine-header">
+                    <div class="medicine-name">
+                        <?php echo htmlspecialchars($selected_medicine['scientific_name']); ?>
+                        <?php if (!empty($selected_medicine['trade_name'])): ?>
+                            <small>(<?php echo htmlspecialchars($selected_medicine['trade_name']); ?>)</small>
+                        <?php endif; ?>
+                    </div>
+                    <button class="favorite-btn" data-medicine-id="<?php echo $selected_medicine['id']; ?>" onclick="toggleFavorite(this)">
+                        <i class="fas <?php echo in_array($selected_medicine['id'], $favorites) ? 'fa-heart' : 'far fa-heart'; ?>"></i>
+                        <?php echo in_array($selected_medicine['id'], $favorites) ? 'مفضل' : 'إضافة للمفضلة'; ?>
+                    </button>
+                </div>
+                
+                <div class="medicine-body">
+                    <?php if (!empty($selected_medicine['image'])): ?>
+                        <img src="<?php echo htmlspecialchars($selected_medicine['image']); ?>" class="medicine-image" style="max-width: 200px;" alt="صورة الدواء">
+                    <?php endif; ?>
+                    
+                    <div class="info-row">
+                        <div class="info-label">الشركة المصنعة:</div>
+                        <div class="info-value"><?php echo htmlspecialchars($selected_medicine['manufacturer']); ?></div>
+                    </div>
+                    
+                    <div class="info-row">
+                        <div class="info-label">نوع الدواء:</div>
+                        <div class="info-value">
+                            <?php 
+                                echo $types[$selected_medicine['medicine_type']] ?? 'غير محدد';
+                            ?>
+                        </div>
+                    </div>
+                    
+                    <div class="info-row">
+                        <div class="info-label">الباركود:</div>
+                        <div class="info-value"><?php echo htmlspecialchars($selected_medicine['barcode'] ?? 'غير متوفر'); ?></div>
+                    </div>
+                    
+                    <h3 class="section-title"><i class="fas fa-info-circle"></i> الوصف</h3>
+                    <div class="info-value"><?php echo nl2br(htmlspecialchars($selected_medicine['description'])); ?></div>
+                    
+                    <h3 class="section-title"><i class="fas fa-flask"></i> المكونات</h3>
+                    <div class="info-value"><?php echo nl2br(htmlspecialchars($selected_medicine['ingredients'])); ?></div>
+                    
+                    <h3 class="section-title"><i class="fas fa-book-medical"></i> دواعي الاستعمال</h3>
+                    <div class="info-value"><?php echo nl2br(htmlspecialchars($selected_medicine['usage_instructions'])); ?></div>
+                    
+                    <h3 class="section-title"><i class="fas fa-exclamation-triangle"></i> موانع الاستعمال</h3>
+                    <div class="info-value"><?php echo nl2br(htmlspecialchars($selected_medicine['contraindications'])); ?></div>
+                    
+                    <h3 class="section-title"><i class="fas fa-radiation-alt"></i> الآثار الجانبية</h3>
+                    <div class="info-value"><?php echo nl2br(htmlspecialchars($selected_medicine['side_effects'])); ?></div>
+                    
+                    <div class="info-row">
+                        <div class="info-label">تاريخ الإضافة:</div>
+                        <div class="info-value"><?php echo date('Y-m-d H:i', strtotime($selected_medicine['created_at'])); ?></div>
+                    </div>
+                </div>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <script>
+        // تفعيل أزرار المفضلة
+        function toggleFavorite(btn) {
+            const medicineId = btn.getAttribute('data-medicine-id');
+            const icon = btn.querySelector('i');
+            const isFavorite = icon.classList.contains('fas');
+            
+            // إرسال طلب AJAX لتحديث المفضلة
+            fetch('update_favorite.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `medicine_id=${medicineId}&action=${isFavorite ? 'remove' : 'add'}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    if (isFavorite) {
+                        icon.classList.remove('fas');
+                        icon.classList.add('far');
+                        if (btn.textContent.includes('مفضل')) {
+                            btn.innerHTML = '<i class="far fa-heart"></i> إضافة للمفضلة';
+                        }
+                    } else {
+                        icon.classList.remove('far');
+                        icon.classList.add('fas');
+                        if (btn.textContent.includes('إضافة')) {
+                            btn.innerHTML = '<i class="fas fa-heart"></i> مفضل';
+                        }
+                    }
+                }
+            });
+        }
+
+        // إغلاق تفاصيل الدواء
+        function closeDetails() {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('medicine_id');
+            window.location.href = url.toString();
+        }
+
+        // التمرير إلى قسم التفاصيل عند فتحها
+        <?php if ($selected_medicine): ?>
+            window.addEventListener('load', function() {
+                document.getElementById('medicineDetails').scrollIntoView({ behavior: 'smooth' });
+            });
+        <?php endif; ?>
+    </script>
+</body>
+</html>
