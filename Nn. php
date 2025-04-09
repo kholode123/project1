@@ -1,0 +1,127 @@
+<?php
+// التحقق من تسجيل الدخول ونوع المستخدم
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['user_type'] != 'pharmacist') {
+    header("Location: login.php");
+    exit();
+}
+
+// اتصال بقاعدة البيانات
+require_once 'config.php';
+
+// جلب بيانات الصيدلية
+$user_id = $_SESSION['user_id'];
+$stmt = $pdo->prepare("SELECT p.*, u.email FROM pharmacies p JOIN users u ON p.user_id = u.id WHERE u.id = ?");
+$stmt->execute([$user_id]);
+$pharmacy = $stmt->fetch();
+
+if(!$pharmacy) {
+    $_SESSION['error_message'] = "لم يتم العثور على بيانات الصيدلية";
+    header("Location: pharmacist.php");
+    exit();
+}
+
+// معالجة تحديث البيانات
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // بدء المعاملة
+    $pdo->beginTransaction();
+    
+    try {
+        // جمع البيانات من النموذج مع التطهير
+        $name = htmlspecialchars(trim($_POST['name']));
+        $email = filter_var(trim($_POST['email']), FILTER_SANITIZE_EMAIL);
+        $address = htmlspecialchars(trim($_POST['address']));
+        $city = htmlspecialchars(trim($_POST['city']));
+        $phone = htmlspecialchars(trim($_POST['phone']));
+        $license_number = htmlspecialchars(trim($_POST['license_number']));
+        
+        // التحقق من صحة البيانات
+        if (empty($name) || empty($email) || empty($address) || empty($city) || empty($phone) || empty($license_number)) {
+            throw new Exception("جميع الحقول مطلوبة");
+        }
+        
+        if(!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            throw new Exception("البريد الإلكتروني غير صالح");
+        }
+        
+        // 1. تحديث بيانات المستخدم (البريد الإلكتروني)
+        $update_user = $pdo->prepare("UPDATE users SET email = ?, updated_at = NOW() WHERE id = ?");
+        if(!$update_user->execute([$email, $user_id])) {
+            throw new Exception("فشل في تحديث بيانات المستخدم");
+        }
+        
+        // 2. تحديث بيانات الصيدلية
+        $update_pharmacy = $pdo->prepare("UPDATE pharmacies SET name = ?, address = ?, city = ?, phone = ?, license_number = ?, updated_at = NOW() WHERE user_id = ?");
+        if(!$update_pharmacy->execute([$name, $address, $city, $phone, $license_number, $user_id])) {
+            throw new Exception("فشل في تحديث بيانات الصيدلية");
+        }
+        
+        // 3. معالجة صورة الصيدلية إذا تم رفعها
+        if (!empty($_FILES['image']['name'])) {
+            $target_dir = "uploads/";
+            
+            // إنشاء المجلد إذا لم يكن موجوداً
+            if (!file_exists($target_dir)) {
+                if(!mkdir($target_dir, 0777, true)) {
+                    throw new Exception("تعذر إنشاء مجلد التحميل");
+                }
+            }
+            
+            $imageFileType = strtolower(pathinfo($_FILES["image"]["name"], PATHINFO_EXTENSION));
+            
+            // التحقق من أن الملف صورة
+            $check = getimagesize($_FILES["image"]["tmp_name"]);
+            if ($check === false) {
+                throw new Exception("الملف المرفوع ليس صورة");
+            }
+            
+            // التحقق من حجم الصورة (2MB كحد أقصى)
+            if ($_FILES["image"]["size"] > 2000000) {
+                throw new Exception("حجم الصورة يجب أن يكون أقل من 2MB");
+            }
+            
+            // التحقق من نوع الصورة
+            $allowed_types = ['jpg', 'jpeg', 'png', 'gif'];
+            if (!in_array($imageFileType, $allowed_types)) {
+                throw new Exception("نوع الصورة غير مسموح به. المسموح به: JPG, JPEG, PNG, GIF");
+            }
+            
+            // إنشاء اسم فريد للصورة
+            $new_filename = 'pharmacy_' . $user_id . '_' . uniqid() . '.' . $imageFileType;
+            $target_path = $target_dir . $new_filename;
+            
+            // محاولة رفع الصورة
+            if (move_uploaded_file($_FILES["image"]["tmp_name"], $target_path)) {
+                // حذف الصورة القديمة إذا كانت موجودة
+                if (!empty($pharmacy['image']) && file_exists($pharmacy['image'])) {
+                    unlink($pharmacy['image']);
+                }
+                
+                // تحديث مسار الصورة في قاعدة البيانات
+                $update_image = $pdo->prepare("UPDATE pharmacies SET image = ?, updated_at = NOW() WHERE user_id = ?");
+                if(!$update_image->execute([$target_path, $user_id])) {
+                    throw new Exception("فشل في تحديث صورة الصيدلية");
+                }
+
+                $_SESSION['user_image'] = $target_path;
+            } else {
+                throw new Exception("حدث خطأ أثناء رفع الصورة");
+            }
+        }
+        
+        // إتمام المعاملة إذا نجحت جميع العمليات
+        $pdo->commit();
+        
+        $_SESSION['success_message'] = "تم تحديث الملف الشخصي بنجاح";
+        header("Location: edit_profile.php");
+        exit();
+
+    } catch (Exception $e) {
+        // التراجع عن جميع التغييرات في حالة حدوث خطأ
+        $pdo->rollBack();
+        $_SESSION['error_message'] = $e->getMessage();
+        header("Location: edit_profile.php");
+        exit();
+    }
+}
+?>
